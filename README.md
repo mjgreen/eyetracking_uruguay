@@ -15,3 +15,6 @@ https://uruguay.bournemouth.ac.uk/shiny/sample-apps/eyetracking_uruguay/
 
 ## To rebuild from the venv lockfile, use `renv::rebuild()` on the server after having logged in using
 >ssh -p 22 mgreen@uruguay.bournemouth.ac.uk
+
+## goto server dir
+setwd("/srv/shiny-server/sample-apps/eyetracking_uruguay/")
