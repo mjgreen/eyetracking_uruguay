@@ -18,3 +18,6 @@ https://uruguay.bournemouth.ac.uk/shiny/sample-apps/eyetracking_uruguay/
 
 ## goto server dir
 setwd("/srv/shiny-server/sample-apps/eyetracking_uruguay/")
+
+## launch Rstudio on the server
+https://uruguay.bournemouth.ac.uk/server/auth-sign-in?appUri=%2F
