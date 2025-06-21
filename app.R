@@ -5,7 +5,7 @@ library("deldir")
 library("jpeg")
 library("tibble")
 library("readr")
-library("pipeR")
+#library("pipeR")
 library("dplyr")
 #library(tidyverse)
 
