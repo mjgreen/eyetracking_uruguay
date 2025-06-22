@@ -17,10 +17,12 @@ ui <- page_fillable(
          fileInput("upload_face", "Upload face", accept = "image/jpeg"),
          input_switch("toggle_fixations", "Toggle fixation visibility on/off"),
          textInput("aoi_name", "Type name for this AOI, then click in AOI", "a"),
-         actionButton("annotate", "Annotate current face"),
-         actionButton("next_face", "Start next face"),
+         actionButton("finish_current_face", "Finish current face"),
+         actionButton("start_a_new_face", "Start a new face, if any"),
          actionButton("debug", "Debug (for dev use only)"),
-         actionButton("write", "Exit, saving annotation")
+         downloadButton("download_annotated_fixrep_as_tsv", 
+                        "Download fixation report annotated with an AOI for each fixation"),
+         actionButton("save_all_vars_as_local_rds", "Exit, saving annotation")
          ),
     card(card_header("Face for edit"),
          plotOutput("face_for_edit", click = "face_for_edit_click", dblclick = "face_for_edit_dblclick")
@@ -41,7 +43,8 @@ server <- function(input, output, session) {
     fixrep = NA,
     fixrep_this_face = NA,
     fixrep_with_annotation = tibble(),
-    vor = NA
+    vor = NA,
+    this_face_is_annotated = FALSE
     )
   
   observe({
@@ -61,51 +64,81 @@ server <- function(input, output, session) {
     g$fixrep = read_csv(input$upload_fixrep$datapath, show_col_types = F) 
   })
   
-  # Observe without event
+  # Observe without event - respond when there is a face uploaded and a fixrep uploaded
   observe({
     if(!is.null(input$upload_face) && !is.null(input$upload_fixrep)){
-      g$fixrep_this_face = g$fixrep %>% filter(face_jpeg == input$upload_face$name)
+      g$fixrep_this_face = g$fixrep %>% 
+        filter(face_jpeg == input$upload_face$name) %>% 
+        mutate(tile = as.numeric(NA), tile_name = as.character(NA))
     }
   })
 
   # Respond to clicks on the face
   observeEvent(input[['face_for_edit_click']], {
-    # Make AOI name
-    if(input$aoi_name == "a"){
-      aoi_name = paste0(input$aoi_name,nrow(g$aois)+1)
-      updateTextInput(session, "aoi_name", value="a")
-    } else {
-      aoi_name = input$aoi_name
-      updateTextInput(session, "aoi_name", value="a")
-    }
-    this_aoi = tibble(x=input$face_for_edit_click$x, 
-                      y=input$face_for_edit_click$y, 
-                      jpg=input[['upload_face']]$name,
-                      aoi_name=aoi_name)
-    g$aois = g$aois %>% bind_rows(this_aoi)
+    if(between(input$face_for_edit_click$x, 0, 600) & between(input$face_for_edit_click$y, 0, 800)){
+      # Make AOI name
+      if(input$aoi_name == "a"){
+        aoi_name = paste0(input$aoi_name,nrow(g$aois)+1)
+        updateTextInput(session, "aoi_name", value="a")
+      } else {
+        aoi_name = input$aoi_name
+        updateTextInput(session, "aoi_name", value="a")
+      }
+      # Construct function-internal this_aoi
+      this_aoi = tibble(x = input$face_for_edit_click$x, 
+                        y = input$face_for_edit_click$y, 
+                        jpg = input[['upload_face']]$name,
+                        aoi_name = aoi_name)
+      # Add function-internal this_aoi to global aois
+      g$aois = g$aois %>% bind_rows(this_aoi)
+      # If there are enough AOIs then run deldir
+      if(nrow(g$aois)>=2){
+        # Do deldir
+        vor <-
+          deldir(
+            x = g$aois$x, 
+            y = g$aois$y, 
+            id = g$aois$aoi_name,
+            rw = c(xleft = 0, xright=600, ybottom=0, ytop=800)
+          )
+        g$vor = vor
+        # Annotate the current face in a loop through the fixations on this face
+        for(i in 1:nrow(g$fixrep_this_face)){
+          x = g$fixrep_this_face[i, "FIX_X"] %>% pull()
+          y = g$fixrep_this_face[i, "FIX_Y"] %>% pull()
+          tl = tile.list(g$vor)
+          tile_number = which.tile(x, y, tl)
+          g$fixrep_this_face[i, "tile"] = tile_number
+          g$fixrep_this_face[i, "tile_name"] = g$aois$aoi_name[tile_number]
+        }
+      } # end of if there are enough AOIs then do deldir etc
+    } # end of check whether click is in image
   })
   
-  # Respond to annotate
-  observeEvent(input[['annotate']], {
-    #browser()
-    for(i in 1:nrow(g$fixrep_this_face)){
-      x=g$fixrep_this_face[i, "FIX_X"] %>% pull()
-      y=g$fixrep_this_face[i, "FIX_Y"] %>% pull()
-      tl=tile.list(g$vor)
-      tile_number = which.tile(x,y,tl)
-      g$fixrep_this_face[i, "tile"] = tile_number
-      g$fixrep_this_face[i, "tile_name"] = g$aois$aoi_name[tile_number]
-    }
+  # Respond to finish current face
+  observeEvent(input[['finish_current_face']], {
+    # Save the current face's annotation
     g$fixrep_with_annotation = g$fixrep_with_annotation %>% bind_rows(g$fixrep_this_face)
+    # add the current face's aois to the global list of all aois
     g$aois_all = g$aois_all %>% bind_rows(g$aois)
+    # Set flag
+    g$this_face_is_annotated = TRUE
+    shinyjs::alert("Current face AOIs processed")
   })
   
   # Respond to start next face
-  observeEvent(input[['next_face']], {
-    g$aois_all = g$aois_all %>% bind_rows(g$aois)
+  observeEvent(input[['start_a_new_face']], {
+    # catch the case where the next face is initiated without saving the current face
+    if(g$this_face_is_annotated == FALSE){
+      shinyjs::runjs("document.getElementById('finish_current_face').click();")
+    }
+    # Clear this face's data
     g$aois = tibble()
     reset("toggle_fixations")
     reset("upload_face")
+    # Set flag
+    g$this_face_is_annotated = FALSE
+    # Invite user to upload next face
     shinyjs::runjs("document.getElementById('upload_face').click();")
   })
   
@@ -114,9 +147,31 @@ server <- function(input, output, session) {
     browser()
   })
   
+  # Respond to download annotated fixrep as csv
+  anotated_fixrep_data <- reactive({
+    if(!is.null(g$fixrep_with_annotation)){
+      g$fixrep_with_annotation  
+    }
+  })
+  output$download_annotated_fixrep_as_tsv <- downloadHandler(
+    filename = function() {
+      paste0("fixrep_with_annotation", ".tsv")
+    },
+    content = function(file) {
+      vroom::vroom_write(anotated_fixrep_data(), file)
+    }
+  )
+  
   # Respond to Exit saving annotation
-  observeEvent(input[['write']], {
-    saveRDS(g$fixrep_with_annotation, "fixrep_with_annotation.rds")
+  observeEvent(input[['save_all_vars_as_local_rds']], {
+    # catch the case where the next face is initiated without saving the current face
+    if(g$this_face_is_annotated == FALSE){
+      shinyjs::runjs("document.getElementById('finish_current_face').click();")
+    }
+    saveRDS(g$fixrep_with_annotation, "z_fixrep_with_annotation.rds")
+    saveRDS(g$aois_all, "z_aois_all.rds")
+    shinyjs::logjs("Exit reached")
+    Sys.sleep(2)
     stopApp()
   })
   
@@ -150,15 +205,7 @@ server <- function(input, output, session) {
              pos=1, offset=2, col="yellow", cex=2)
       }
       if(nrow(g$aois) >= 2){
-        vor <-
-          deldir(
-            x=g$aois$x, 
-            y=g$aois$y, 
-            id = g$aois$aoi_name,
-            rw=c(xleft = 0, xright=600, ybottom=0, ytop=800)
-            )
-        g$vor = vor
-        plot(vor, add=TRUE, wlines="tess", showpoints=FALSE, showrect=TRUE, labelPts=TRUE, lwd=3, cex=2, lex=3, cmpnt_col=c(tri=1,tess=1,points=1,labels=2,rect=1), cmpnt_lty=c(tri=1,tess=2), axes=TRUE)
+        plot(g$vor, add=TRUE, wlines="tess", showpoints=FALSE, showrect=TRUE, labelPts=TRUE, lwd=3, cex=2, lex=3, cmpnt_col=c(tri=1,tess=1,points=1,labels=2,rect=1), cmpnt_lty=c(tri=1,tess=2), axes=TRUE)
       }}}, width=600, height=800)
 
 }
